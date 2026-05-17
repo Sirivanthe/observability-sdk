@@ -1,148 +1,116 @@
 # Integrating observability_sdk into ControlTester 3000
 
-This guide adds the full Model Observability dashboard to ControlTester 3000 (TRACE).
-Follow the steps in order. Each step is independently verifiable before moving to the next.
+Tested and proven on macOS with Node 25, Python 3.12, MongoDB 7, Ollama.
+Follow steps in order. Do not skip ahead.
 
 ---
 
 ## Prerequisites
 
-- ControlTester 3000 cloned and running locally (see its README)
-- `observability_sdk/` folder copied into the project root:
-  ```
-  ControlTester_3000_kv/
-  ├── observability_sdk/    ← copy here
-  ├── api/
-  ├── kpmg_ui/
-  └── ...
-  ```
+- ControlTester 3000 cloned locally
+- MongoDB running: `brew services start mongodb-community`
+- Ollama running with a model pulled: `ollama pull llama3.2`
+- Python 3.10+
 
 ---
 
-## Step 1 — Fix MongoDB connection for local dev
+## Step 1 — Copy the SDK into the project
 
-The default `MONGO_URI` is hardcoded at module level in `utils/control_assurance/ct_db.py`,
-which means it's read before `.env` is loaded. Fix it to read lazily:
-
-**File:** `utils/control_assurance/ct_db.py`
-
-Find:
-```python
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongodb:27017")
-_client: pymongo.MongoClient | None = None
-
-
-def _get_db():
-    global _client
-    if _client is None:
-        _client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)
-    return _client["trace_db"]
-```
-
-Replace with:
-```python
-_client: pymongo.MongoClient | None = None
-
-
-def _get_db():
-    global _client
-    if _client is None:
-        mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-        _client = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=3000)
-    return _client["trace_db"]
-```
-
-> **Why:** The original reads the env var at import time, before `load_dotenv()` runs in `main.py`.
-> Moving it inside `_get_db()` means it's read at first connection, after the env is loaded.
-
----
-
-## Step 2 — Add `.env` entry for local MongoDB
-
-In your `.env` file (copy from `.env.example` if it doesn't exist), add:
-
-```
-MONGO_URI=mongodb://localhost:27017
-OLLAMA_LLM_MODEL=llama3.2:latest
-```
-
-> **Note:** Change `llama3.2:latest` to match whatever model you have pulled in Ollama.
-> Check with: `curl http://localhost:11434/api/tags`
-
----
-
-## Step 3 — Wire the SDK into FastAPI
-
-**File:** `api/main.py`
-
-**Change 1** — Add import (after the existing imports, around line 78):
-```python
-from observability_sdk import setup_observability
-```
-
-**Change 2** — Call setup after `app = FastAPI(...)` is defined (around line 186, after the closing `)` of the FastAPI constructor):
-```python
-# Observability SDK — must be added before first request, after app creation
-setup_observability(app, db_path="api/observability.db")
-```
-
-> **Why after `app = FastAPI(...)`:** FastAPI middleware must be added before the app starts
-> handling requests, but after the app object exists. Adding it inside `lifespan()` is too late.
-
-**Verify:** Start the API and check:
 ```bash
-curl http://localhost:8000/observability/health
-```
-Expected response:
-```json
-{"status": "ok", "model_performance": "Healthy", "agent_operations": "Unhealthy", ...}
+cp -r /path/to/observability-sdk /path/to/ControlTester_3000_kv/observability_sdk
 ```
 
----
-
-## Step 4 — Instrument the LLM client (optional but recommended)
-
-To get real LLM call metrics, wrap the `generate()` method of your LLM client.
-
-Find your LLM client class — likely in `utils/llm_provider.py` or `utils/llm_factory.py`.
-Look for a class with an async `generate()` method that returns a dict with `response`, `prompt_tokens`, `completion_tokens`, `model_name`.
-
-Add the decorator:
-```python
-from observability_sdk import track_llm_generate
-
-class YourLLMClient:
-    model_name = "llama3.2:latest"   # or whatever attribute holds the model name
-
-    @track_llm_generate(model_name_attr="model_name")
-    async def generate(self, prompt, ...):
-        ...  # your existing code unchanged
+Verify:
 ```
-
-For the Ollama client specifically, find where `ollama.chat()` or similar is called and wrap it with `record_llm_call()` if it's not a class method:
-```python
-from observability_sdk import record_llm_call
-import time
-
-start = time.perf_counter()
-response = ollama.chat(model=model, messages=messages)
-record_llm_call(
-    model=model,
-    prompt_tokens=response.get("prompt_eval_count", 0),
-    completion_tokens=response.get("eval_count", 0),
-    latency_ms=(time.perf_counter() - start) * 1000,
-    provider="ollama",
-    status="success",
-)
+ls observability_sdk/
+→ README.md  __init__.py  backend  docs  example  frontend  gitignore
 ```
 
 ---
 
-## Step 5 — Add the React page
+## Step 2 — Create .env file
 
-**File to create:** `kpmg_ui/client/src/pages/observability.tsx`
+```bash
+cd /path/to/ControlTester_3000_kv
 
-Copy `observability_sdk/frontend/react/ObservabilityPage.tsx` to that path:
+echo 'MONGO_URI=mongodb://localhost:27017
+OLLAMA_LLM_MODEL=llama3.2:latest' > .env
+```
+
+Check your actual Ollama model name with:
+```bash
+curl http://localhost:11434/api/tags
+```
+
+---
+
+## Step 3 — Fix MongoDB connection
+
+Run this from inside the ControlTester folder:
+
+```bash
+python3 << 'EOF'
+from pathlib import Path
+f = Path("utils/control_assurance/ct_db.py")
+c = f.read_text()
+old = 'MONGO_URI = os.getenv("MONGO_URI", "mongodb://mongodb:27017")\n_client: pymongo.MongoClient | None = None\n\n\ndef _get_db():\n    global _client\n    if _client is None:\n        _client = pymongo.MongoClient(MONGO_URI, serverSelectionTimeoutMS=3000)\n    return _client["trace_db"]'
+new = '_client: pymongo.MongoClient | None = None\n\n\ndef _get_db():\n    global _client\n    if _client is None:\n        mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")\n        _client = pymongo.MongoClient(mongo_uri, serverSelectionTimeoutMS=3000)\n    return _client["trace_db"]'
+if old in c:
+    f.write_text(c.replace(old, new, 1))
+    print("patched")
+else:
+    print("already patched or content differs")
+EOF
+```
+
+---
+
+## Step 4 — Fix Node.js reusePort (macOS only)
+
+```bash
+sed -i '' 's/    listenOptions.reusePort = true;/    \/\/ listenOptions.reusePort = true;/' \
+  kpmg_ui/server/index.ts
+```
+
+Verify: `grep -n "reusePort" kpmg_ui/server/index.ts`
+Expected: line shows `// listenOptions.reusePort = true;`
+
+---
+
+## Step 5 — Wire SDK into FastAPI (api/main.py)
+
+```bash
+sed -i '' 's/from utils.control_assurance.ct_db import ensure_indexes as ct_ensure_indexes/from utils.control_assurance.ct_db import ensure_indexes as ct_ensure_indexes\nfrom observability_sdk import setup_observability/' api/main.py
+```
+
+Find the line number where app = FastAPI(...) closes:
+```bash
+grep -n "^)" api/main.py | head -5
+```
+
+The closing `)` is typically around line 184-186. Insert after it (replace 185 with actual line number):
+```bash
+sed -i '' '185a\
+\
+setup_observability(app, db_path="api/observability.db")\
+' api/main.py
+```
+
+Verify:
+```bash
+grep -n "setup_observability" api/main.py
+```
+
+Expected (two lines):
+```
+79:from observability_sdk import setup_observability
+187:setup_observability(app, db_path="api/observability.db")
+```
+
+---
+
+## Step 6 — Add the React page
+
 ```bash
 cp observability_sdk/frontend/react/ObservabilityPage.tsx \
    kpmg_ui/client/src/pages/observability.tsx
@@ -150,119 +118,106 @@ cp observability_sdk/frontend/react/ObservabilityPage.tsx \
 
 ---
 
-## Step 6 — Wire into App.tsx
+## Step 7 — Wire into App.tsx
 
-**File:** `kpmg_ui/client/src/App.tsx`
+```bash
+sed -i '' 's/import { AssetRegistryProvider } from "@\/contexts\/AssetRegistryContext";/import ObservabilityPage from "@\/pages\/observability";\nimport { AssetRegistryProvider } from "@\/contexts\/AssetRegistryContext";/' \
+  kpmg_ui/client/src/App.tsx
 
-**Change 1** — Add import (with the other page imports):
-```typescript
-import ObservabilityPage from "@/pages/observability";
+sed -i '' 's|{ path: "/asset-registry",       Page: AssetRegistryPage       },|{ path: "/asset-registry",       Page: AssetRegistryPage       },\n  { path: "/observability",         Page: ObservabilityPage       },|' \
+  kpmg_ui/client/src/App.tsx
 ```
 
-**Change 2** — Add route to the `PAGES` array:
-```typescript
-{ path: "/observability", Page: ObservabilityPage },
+Verify:
+```bash
+grep -n "ObservabilityPage\|observability" kpmg_ui/client/src/App.tsx
 ```
 
-Place it after the `/asset-registry` entry:
-```typescript
-{ path: "/asset-registry",  Page: AssetRegistryPage  },
-{ path: "/observability",   Page: ObservabilityPage  },  // ← add this
+Expected:
 ```
-
----
-
-## Step 7 — Add sidebar nav entry
-
-**File:** `kpmg_ui/client/src/components/AppLayout.tsx`
-
-**Change 1** — Add `Activity` to the lucide-react import:
-```typescript
-import {
-  // ... existing imports ...
-  Activity,       // ← add this
-} from "lucide-react";
-```
-
-**Change 2** — Add nav entry to `HIDEABLE_TABS` array (after Issue Management):
-```typescript
-{ title: "Issue Management", fullTitle: "Issue Management", path: "/issue-management", icon: AlertTriangle },
-{ title: "Observability", fullTitle: "Model Observability", path: "/observability", icon: Activity },  // ← add this
+43:import ObservabilityPage from "@/pages/observability";
+69:  { path: "/observability",         Page: ObservabilityPage       },
 ```
 
 ---
 
-## Step 8 — Fix Node.js reusePort issue (macOS only)
+## Step 8 — Add sidebar nav entry
 
-If you see `ENOTSUP` when running the dev server on macOS with Node 25+:
+```bash
+sed -i '' 's/  FileStack,/  FileStack,\n  Activity,/' \
+  kpmg_ui/client/src/components/AppLayout.tsx
 
-**File:** `kpmg_ui/server/index.ts`
-
-Find and comment out:
-```typescript
-listenOptions.reusePort = true;
+sed -i '' 's/{ title: "Issue Management", fullTitle: "Issue Management", path: "\/issue-management", icon: AlertTriangle },/{ title: "Issue Management", fullTitle: "Issue Management", path: "\/issue-management", icon: AlertTriangle },\n  { title: "Observability", fullTitle: "Model Observability", path: "\/observability", icon: Activity },/' \
+  kpmg_ui/client/src/components/AppLayout.tsx
 ```
 
-Replace with:
-```typescript
-// listenOptions.reusePort = true; // disabled — not supported on macOS Node 25+
+Verify:
+```bash
+grep -n "Activity\|Observability" kpmg_ui/client/src/components/AppLayout.tsx
+```
+
+Expected:
+```
+20:  Activity,
+62:  { title: "Observability", fullTitle: "Model Observability", path: "/observability", icon: Activity },
 ```
 
 ---
 
 ## Step 9 — Run and verify
 
-Start MongoDB:
+**Terminal 1 — FastAPI:**
 ```bash
-brew services start mongodb-community
+python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Start FastAPI (terminal 1):
-```bash
-cd /path/to/ControlTester_3000_kv
-python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Look for this line in the startup log:
+Look for in startup log:
 ```
 Observability SDK initialised — db=api/observability.db, endpoints at /observability/*
+Application startup complete.
 ```
 
-Start the React dev server (terminal 2):
+**Terminal 2 — React:**
 ```bash
 cd kpmg_ui
+npm install
 PORT=5002 npm run dev
 ```
 
-Open `http://localhost:5002`, log in with:
-- Email: `admin@bank.com`
-- Password: the password
-
-Navigate to **Observability** in the sidebar.
+Open `http://localhost:5002` → login `admin@bank.com` / `zUlqVAZ5wt` → click **Observability** in sidebar.
 
 ---
 
 ## What you should see
 
-- **Model Performance** — 0 requests initially (increases as you use the app)
-- **Agent Activity** — 0 activities initially
-- **System Health** — Model Performance: Healthy, Agent Operations: Unhealthy (0% — no agents tracked yet)
-- **Recent Model Metrics** — empty until LLM calls are instrumented (Step 4)
-
-Run a control test or risk assessment, then refresh the Observability page to see real data.
+- 4 Model Performance cards — all 0 initially, fills as you use the app
+- 3 Agent Activity cards — all 0 until agents are instrumented
+- System Health — Model Performance: Healthy, Agent Operations: Unhealthy (expected)
+- Empty tables — fill as LLM calls are made
 
 ---
 
-## Files changed summary
+## Files changed (7 files, ~15 lines)
 
 | File | Change |
 |---|---|
-| `utils/control_assurance/ct_db.py` | MONGO_URI read lazily inside `_get_db()` |
-| `.env` | Added `MONGO_URI` and correct Ollama model |
-| `api/main.py` | Import + `setup_observability(app, ...)` call |
+| `.env` | Created — MongoDB URI + Ollama model |
+| `utils/control_assurance/ct_db.py` | MONGO_URI read lazily |
+| `kpmg_ui/server/index.ts` | reusePort commented out (macOS) |
+| `api/main.py` | Import + setup_observability() call |
 | `kpmg_ui/client/src/pages/observability.tsx` | New file — copied from SDK |
-| `kpmg_ui/client/src/App.tsx` | Import + route entry |
-| `kpmg_ui/client/src/components/AppLayout.tsx` | `Activity` import + nav entry |
-| `kpmg_ui/server/index.ts` | Comment out `reusePort` (macOS only) |
+| `kpmg_ui/client/src/App.tsx` | Import + route |
+| `kpmg_ui/client/src/components/AppLayout.tsx` | Activity icon + nav entry |
 
-Total changes: **7 files, ~15 lines**.
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `ServerSelectionTimeoutError: mongodb:27017` | Add `MONGO_URI=mongodb://localhost:27017` to `.env` |
+| `ENOTSUP` on port | Comment out `listenOptions.reusePort = true` in `kpmg_ui/server/index.ts` |
+| `Cannot add middleware after app started` | Move `setup_observability()` to module level, not inside `lifespan()` |
+| Observability not in sidebar | Check AppLayout.tsx has Activity import and nav entry |
+| Page shows "API unreachable" | FastAPI not running, or setup_observability() not called |
+| Dark card backgrounds | Make sure you copied the latest ObservabilityPage.tsx from the SDK |
