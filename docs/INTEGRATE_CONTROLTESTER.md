@@ -236,7 +236,7 @@ PORT=5002 npm run dev
 
 Open `http://localhost:5002`, log in with:
 - Email: `admin@bank.com`
-- Password: `zUlqVAZ5wt`
+- Password: the password
 
 Navigate to **Observability** in the sidebar.
 
