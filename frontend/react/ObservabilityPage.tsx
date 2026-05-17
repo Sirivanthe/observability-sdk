@@ -155,9 +155,9 @@ function StatCard({
       <CardContent className="pt-5 pb-4">
         <div className="flex items-start justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">{label}</p>
-            <p className="text-3xl font-bold text-slate-800">{value}</p>
-            {sub && <p className="text-xs text-slate-400 mt-1">{sub}</p>}
+            <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{color:"#64748b"}}>{label}</p>
+            <p className="text-3xl font-bold" style={{color:"#0f172a"}}>{value}</p>
+            {sub && <p className="text-xs mt-1" style={{color:"#94a3b8"}}>{sub}</p>}
           </div>
           <div className={`p-2 rounded-lg bg-slate-50 ${iconColor ?? "text-slate-400"}`}>
             <Icon className="w-5 h-5" />
@@ -239,7 +239,7 @@ export default function ObservabilityPage() {
 
   // ── Dashboard ───────────────────────────────────────────────────────────────
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="p-6 space-y-6 max-w-7xl mx-auto overflow-y-auto h-full"> 
 
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -365,7 +365,7 @@ export default function ObservabilityPage() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
         {/* Per-model table */}
-        <Card className="border border-slate-200 shadow-sm">
+        <Card className="border border-slate-200 shadow-none" style={{background:"#f8fafc",color:"#1e293b"}}>
           <CardHeader className="pb-2">
             <CardTitle className="text-base font-semibold text-slate-700">Recent Model Metrics</CardTitle>
           </CardHeader>
