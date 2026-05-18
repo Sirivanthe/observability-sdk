@@ -184,7 +184,7 @@ npm install
 PORT=5002 npm run dev
 ```
 
-Open `http://localhost:5002` → login `admin@bank.com` / `zUlqVAZ5wt` → click **Observability** in sidebar.
+Open `http://localhost:5002` → login `admin@bank.com` / the password → click **Observability** in sidebar.
 
 ---
 
